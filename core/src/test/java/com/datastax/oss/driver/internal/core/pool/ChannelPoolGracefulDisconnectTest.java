@@ -19,9 +19,7 @@ package com.datastax.oss.driver.internal.core.pool;
 
 import static com.datastax.oss.driver.Assertions.assertThat;
 import static com.datastax.oss.driver.Assertions.assertThatStage;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,9 +30,6 @@ import com.datastax.oss.driver.api.core.metrics.DefaultSessionMetric;
 import com.datastax.oss.driver.internal.core.channel.DriverChannel;
 import com.datastax.oss.driver.internal.core.channel.DriverChannelOptions;
 import com.datastax.oss.driver.internal.core.channel.MockChannelFactoryHelper;
-import com.datastax.oss.driver.internal.core.metadata.DefaultNode;
-import com.datastax.oss.driver.internal.core.metadata.GracefulDisconnectEvent;
-import com.datastax.oss.driver.internal.core.metadata.TestNodeFactory;
 import com.datastax.oss.protocol.internal.ProtocolConstants;
 import java.util.concurrent.CompletionStage;
 import org.junit.Test;
@@ -88,35 +83,7 @@ public class ChannelPoolGracefulDisconnectTest extends ChannelPoolTestBase {
   }
 
   @Test
-  public void should_close_all_channels_when_graceful_disconnect_event_for_node() throws Exception {
-    DriverChannel channel1 = newMockDriverChannel(1);
-    DriverChannel channel2 = newMockDriverChannel(2);
-    initPool(true, channel1, channel2);
-
-    // As fired by the control connection when it receives the event for this node:
-    eventBus.fire(new GracefulDisconnectEvent(node));
-
-    verify(channel1, VERIFY_TIMEOUT).close();
-    verify(channel2, VERIFY_TIMEOUT).close();
-  }
-
-  @Test
-  public void should_ignore_graceful_disconnect_event_for_other_node() throws Exception {
-    DriverChannel channel1 = newMockDriverChannel(1);
-    initPool(true, channel1);
-
-    DefaultNode otherNode = TestNodeFactory.newNode(2, context);
-    eventBus.fire(new GracefulDisconnectEvent(otherNode));
-
-    // Wait for the event to be processed on the admin executor, then check nothing was closed:
-    verify(eventBus, VERIFY_TIMEOUT).fire(any(GracefulDisconnectEvent.class));
-    Thread.sleep(200);
-    verify(channel1, never()).close();
-  }
-
-  @Test
-  public void should_drain_and_increment_metrics_when_event_received_on_query_connection()
-      throws Exception {
+  public void should_increment_metrics_when_event_received_on_query_connection() throws Exception {
     DriverChannel channel1 = newMockDriverChannel(1);
     initPool(true, channel1);
 
@@ -124,7 +91,10 @@ public class ChannelPoolGracefulDisconnectTest extends ChannelPoolTestBase {
         ArgumentCaptor.forClass(DriverChannelOptions.class);
     verify(channelFactory).connect(eq(node), optionsCaptor.capture());
 
-    // Simulate the server sending GRACEFUL_DISCONNECT on the pooled connection:
+    // Simulate the server sending GRACEFUL_DISCONNECT on the pooled connection. Per CEP-59 the
+    // event stays local to the connection (the draining is handled by InFlightHandler, covered in
+    // InFlightHandlerTest); the pool callback only records the metrics and does not touch the other
+    // channels of the node.
     optionsCaptor
         .getValue()
         .eventCallback
@@ -134,7 +104,5 @@ public class ChannelPoolGracefulDisconnectTest extends ChannelPoolTestBase {
         .incrementCounter(DefaultNodeMetric.GRACEFUL_DISCONNECTS, null);
     verify(sessionMetricUpdater, VERIFY_TIMEOUT)
         .incrementCounter(DefaultSessionMetric.GRACEFUL_DISCONNECTS, null);
-    verify(eventBus, VERIFY_TIMEOUT).fire(any(GracefulDisconnectEvent.class));
-    verify(channel1, VERIFY_TIMEOUT).close();
   }
 }

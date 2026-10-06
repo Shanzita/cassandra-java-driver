@@ -36,7 +36,6 @@ import com.datastax.oss.driver.internal.core.context.InternalDriverContext;
 import com.datastax.oss.driver.internal.core.metadata.DefaultNode;
 import com.datastax.oss.driver.internal.core.metadata.DefaultTopologyMonitor;
 import com.datastax.oss.driver.internal.core.metadata.DistanceEvent;
-import com.datastax.oss.driver.internal.core.metadata.GracefulDisconnectEvent;
 import com.datastax.oss.driver.internal.core.metadata.MetadataManager;
 import com.datastax.oss.driver.internal.core.metadata.NodeStateEvent;
 import com.datastax.oss.driver.internal.core.metadata.TopologyEvent;
@@ -254,11 +253,13 @@ public class ControlConnection implements EventCallback, AsyncAutoCloseable {
         "[{}] Received GRACEFUL_DISCONNECT event on control connection, "
             + "the server is shutting down gracefully",
         logPrefix);
+    // Per CEP-59 the event stays local to the connection that received it: the control channel
+    // drains itself (handled by InFlightHandler) and the control connection reconnects to another
+    // node. We only record the metrics here; the event is not propagated to other connections.
     context
         .getMetricsFactory()
         .getSessionUpdater()
         .incrementCounter(DefaultSessionMetric.GRACEFUL_DISCONNECTS, null);
-    // Fire an internal event to notify other components (particularly the ChannelPool)
     DriverChannel currentChannel = channel;
     if (currentChannel != null) {
       context
@@ -272,7 +273,6 @@ public class ControlConnection implements EventCallback, AsyncAutoCloseable {
                       .getMetricUpdater()
                       .incrementCounter(DefaultNodeMetric.GRACEFUL_DISCONNECTS, null);
                 }
-                context.getEventBus().fire(new GracefulDisconnectEvent(node));
               });
     }
   }

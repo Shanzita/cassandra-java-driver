@@ -39,7 +39,6 @@ import com.datastax.oss.driver.internal.core.config.ConfigChangeEvent;
 import com.datastax.oss.driver.internal.core.context.EventBus;
 import com.datastax.oss.driver.internal.core.context.InternalDriverContext;
 import com.datastax.oss.driver.internal.core.metadata.DefaultNode;
-import com.datastax.oss.driver.internal.core.metadata.GracefulDisconnectEvent;
 import com.datastax.oss.driver.internal.core.metadata.TopologyEvent;
 import com.datastax.oss.driver.internal.core.metrics.SessionMetricUpdater;
 import com.datastax.oss.driver.internal.core.util.Loggers;
@@ -243,7 +242,6 @@ public class ChannelPool implements AsyncAutoCloseable {
     private final Set<DriverChannel> closingChannels = new HashSet<>();
     private final Reconnection reconnection;
     private final Object configListenerKey;
-    private final Object gracefulDisconnectListenerKey;
 
     private NodeDistance distance;
     private int wantedCount;
@@ -280,10 +278,6 @@ public class ChannelPool implements AsyncAutoCloseable {
       this.configListenerKey =
           eventBus.register(
               ConfigChangeEvent.class, RunOrSchedule.on(adminExecutor, this::onConfigChanged));
-      this.gracefulDisconnectListenerKey =
-          eventBus.register(
-              GracefulDisconnectEvent.class,
-              RunOrSchedule.on(adminExecutor, this::onGracefulDisconnect));
     }
 
     private void connect() {
@@ -502,28 +496,13 @@ public class ChannelPool implements AsyncAutoCloseable {
       resize(distance);
     }
 
-    private void onGracefulDisconnect(GracefulDisconnectEvent event) {
-      assert adminExecutor.inEventLoop();
-      if (!event.node.equals(node)) {
-        return;
-      }
-      if (channels.size() == 0) {
-        return;
-      }
-      LOG.info(
-          "[{}] Received GRACEFUL_DISCONNECT for {}, closing all channels for this node gracefully",
-          logPrefix,
-          node);
-      // The graceful close allows in-flight requests to complete before channels are fully closed.
-      for (DriverChannel channel : channels) {
-        channel.close();
-      }
-    }
-
     /**
      * Event callback for query connections that handles GRACEFUL_DISCONNECT events.
      *
      * <p>This is called from the Netty I/O thread when an event is received on a query connection.
+     * The draining of the connection itself is handled locally by {@code InFlightHandler}; this
+     * callback only records the metrics. Per CEP-59 the event stays local to the connection that
+     * received it, so it is not propagated to the other channels of the node.
      */
     private class QueryConnectionEventCallback implements EventCallback {
       @Override
@@ -544,7 +523,6 @@ public class ChannelPool implements AsyncAutoCloseable {
                 .incrementCounter(DefaultNodeMetric.GRACEFUL_DISCONNECTS, null);
           }
           sessionMetricUpdater.incrementCounter(DefaultSessionMetric.GRACEFUL_DISCONNECTS, null);
-          eventBus.fire(new GracefulDisconnectEvent(node));
         } else {
           LOG.warn("[{}] Unexpected event type on query connection: {}", logPrefix, event.type);
         }
@@ -610,7 +588,6 @@ public class ChannelPool implements AsyncAutoCloseable {
       reconnection.stop();
 
       eventBus.unregister(configListenerKey, ConfigChangeEvent.class);
-      eventBus.unregister(gracefulDisconnectListenerKey, GracefulDisconnectEvent.class);
 
       // Close all channels, the pool future completes when all the channels futures have completed
       int toClose = closingChannels.size() + channels.size();

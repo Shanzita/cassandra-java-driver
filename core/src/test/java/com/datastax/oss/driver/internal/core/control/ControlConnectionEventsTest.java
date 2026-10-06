@@ -19,7 +19,6 @@ package com.datastax.oss.driver.internal.core.control;
 
 import static com.datastax.oss.driver.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -32,7 +31,6 @@ import com.datastax.oss.driver.api.core.metrics.DefaultSessionMetric;
 import com.datastax.oss.driver.internal.core.channel.DriverChannel;
 import com.datastax.oss.driver.internal.core.channel.DriverChannelOptions;
 import com.datastax.oss.driver.internal.core.channel.EventCallback;
-import com.datastax.oss.driver.internal.core.metadata.GracefulDisconnectEvent;
 import com.datastax.oss.driver.internal.core.metadata.TopologyEvent;
 import com.datastax.oss.driver.shaded.guava.common.collect.ImmutableList;
 import com.datastax.oss.protocol.internal.ProtocolConstants;
@@ -145,8 +143,8 @@ public class ControlConnectionEventsTest extends ControlConnectionTestBase {
     callback.onEvent(
         new com.datastax.oss.protocol.internal.response.event.GracefulDisconnectEvent());
 
-    // Then
-    verify(eventBus).fire(any(GracefulDisconnectEvent.class));
+    // Then (per CEP-59 the event stays local to the connection; only metrics are recorded, and no
+    // internal event is propagated to the rest of the driver)
     verify(sessionMetricUpdater).incrementCounter(DefaultSessionMetric.GRACEFUL_DISCONNECTS, null);
     verify(nodeMetricUpdater).incrementCounter(DefaultNodeMetric.GRACEFUL_DISCONNECTS, null);
   }
